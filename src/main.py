@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 import uvicorn
 from camoufox.async_api import AsyncCamoufox
 from fastapi import FastAPI, HTTPException, Depends, status, Form, Request, Response
-from starlette.responses import HTMLResponse, RedirectResponse
+from starlette.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.security import APIKeyHeader
 
 import httpx
@@ -65,11 +65,14 @@ def get_config():
     config.setdefault("cf_clearance", "")
     config.setdefault("api_keys", [])
     config.setdefault("usage_stats", {})
-    # Sync in-memory stats with loaded config
-    global model_usage_stats
-    model_usage_stats = defaultdict(int, config["usage_stats"])
-
+    
     return config
+
+def load_usage_stats():
+    """Load usage stats from config into memory"""
+    global model_usage_stats
+    config = get_config()
+    model_usage_stats = defaultdict(int, config.get("usage_stats", {}))
 
 def save_config(config):
     # Persist in-memory stats to the config dict before saving
@@ -133,7 +136,16 @@ async def rate_limit_api_key(key: str = Depends(API_KEY_HEADER)):
     api_key_usage[api_key_str] = [t for t in api_key_usage[api_key_str] if current_time - t < 60]
 
     if len(api_key_usage[api_key_str]) >= rate_limit:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
+        # Calculate seconds until oldest request expires (60 seconds window)
+        oldest_timestamp = min(api_key_usage[api_key_str])
+        retry_after = int(60 - (current_time - oldest_timestamp))
+        retry_after = max(1, retry_after)  # At least 1 second
+        
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Please try again later.",
+            headers={"Retry-After": str(retry_after)}
+        )
         
     api_key_usage[api_key_str].append(current_time)
     
@@ -199,6 +211,8 @@ async def startup_event():
     # Ensure config and models files exist
     save_config(get_config())
     save_models(get_models())
+    # Load usage stats from config
+    load_usage_stats()
     asyncio.create_task(get_initial_data())
 
 # --- UI Endpoints (Login/Dashboard) ---
@@ -395,6 +409,9 @@ async def dashboard(session: str = Depends(get_current_session)):
     
     cf_status = "✅ Configured" if config.get("cf_clearance") else "❌ Not Set"
     cf_class = "status-good" if config.get("cf_clearance") else "status-bad"
+    
+    # Get recent activity count (last 24 hours)
+    recent_activity = sum(1 for timestamps in api_key_usage.values() for t in timestamps if time.time() - t < 86400)
 
     return f"""
         <!DOCTYPE html>
@@ -402,7 +419,24 @@ async def dashboard(session: str = Depends(get_current_session)):
         <head>
             <title>Dashboard - LMArena Bridge</title>
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
             <style>
+                @keyframes fadeIn {{
+                    from {{ opacity: 0; transform: translateY(20px); }}
+                    to {{ opacity: 1; transform: translateY(0); }}
+                }}
+                @keyframes slideIn {{
+                    from {{ opacity: 0; transform: translateX(-20px); }}
+                    to {{ opacity: 1; transform: translateX(0); }}
+                }}
+                @keyframes pulse {{
+                    0%, 100% {{ transform: scale(1); }}
+                    50% {{ transform: scale(1.05); }}
+                }}
+                @keyframes shimmer {{
+                    0% {{ background-position: -1000px 0; }}
+                    100% {{ background-position: 1000px 0; }}
+                }}
                 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
                 body {{
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
@@ -614,6 +648,26 @@ async def dashboard(session: str = Depends(get_current_session)):
                     padding: 20px;
                     border-radius: 8px;
                     text-align: center;
+                    animation: fadeIn 0.6s ease-out;
+                    transition: transform 0.3s;
+                }}
+                .stat-card:hover {{
+                    transform: translateY(-5px);
+                    box-shadow: 0 8px 16px rgba(102, 126, 234, 0.4);
+                }}
+                .section {{
+                    animation: slideIn 0.5s ease-out;
+                }}
+                .section:nth-child(2) {{ animation-delay: 0.1s; }}
+                .section:nth-child(3) {{ animation-delay: 0.2s; }}
+                .section:nth-child(4) {{ animation-delay: 0.3s; }}
+                .model-card {{
+                    animation: fadeIn 0.4s ease-out;
+                    transition: transform 0.2s, box-shadow 0.2s;
+                }}
+                .model-card:hover {{
+                    transform: translateY(-3px);
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
                 }}
                 .stat-value {{
                     font-size: 32px;
@@ -740,6 +794,16 @@ async def dashboard(session: str = Depends(get_current_session)):
                     <div class="section-header">
                         <h2>📊 Usage Statistics</h2>
                     </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px;">
+                        <div>
+                            <h3 style="text-align: center; margin-bottom: 15px; font-size: 16px; color: #666;">Model Usage Distribution</h3>
+                            <canvas id="modelPieChart" style="max-height: 300px;"></canvas>
+                        </div>
+                        <div>
+                            <h3 style="text-align: center; margin-bottom: 15px; font-size: 16px; color: #666;">Request Count by Model</h3>
+                            <canvas id="modelBarChart" style="max-height: 300px;"></canvas>
+                        </div>
+                    </div>
                     <table>
                         <thead>
                             <tr>
@@ -764,6 +828,116 @@ async def dashboard(session: str = Depends(get_current_session)):
                     </div>
                 </div>
             </div>
+            
+            <script>
+                // Prepare data for charts
+                const statsData = {json.dumps(dict(sorted(model_usage_stats.items(), key=lambda x: x[1], reverse=True)[:10]))};
+                const modelNames = Object.keys(statsData);
+                const modelCounts = Object.values(statsData);
+                
+                // Generate colors for charts
+                const colors = [
+                    '#667eea', '#764ba2', '#f093fb', '#4facfe',
+                    '#43e97b', '#fa709a', '#fee140', '#30cfd0',
+                    '#a8edea', '#fed6e3'
+                ];
+                
+                // Pie Chart
+                if (modelNames.length > 0) {{
+                    const pieCtx = document.getElementById('modelPieChart').getContext('2d');
+                    new Chart(pieCtx, {{
+                        type: 'doughnut',
+                        data: {{
+                            labels: modelNames,
+                            datasets: [{{
+                                data: modelCounts,
+                                backgroundColor: colors,
+                                borderWidth: 2,
+                                borderColor: '#fff'
+                            }}]
+                        }},
+                        options: {{
+                            responsive: true,
+                            maintainAspectRatio: true,
+                            plugins: {{
+                                legend: {{
+                                    position: 'bottom',
+                                    labels: {{
+                                        padding: 15,
+                                        font: {{
+                                            size: 11
+                                        }}
+                                    }}
+                                }},
+                                tooltip: {{
+                                    callbacks: {{
+                                        label: function(context) {{
+                                            const label = context.label || '';
+                                            const value = context.parsed || 0;
+                                            const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                            const percentage = ((value / total) * 100).toFixed(1);
+                                            return label + ': ' + value + ' (' + percentage + '%)';
+                                        }}
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }});
+                    
+                    // Bar Chart
+                    const barCtx = document.getElementById('modelBarChart').getContext('2d');
+                    new Chart(barCtx, {{
+                        type: 'bar',
+                        data: {{
+                            labels: modelNames,
+                            datasets: [{{
+                                label: 'Requests',
+                                data: modelCounts,
+                                backgroundColor: colors[0],
+                                borderColor: colors[1],
+                                borderWidth: 1
+                            }}]
+                        }},
+                        options: {{
+                            responsive: true,
+                            maintainAspectRatio: true,
+                            plugins: {{
+                                legend: {{
+                                    display: false
+                                }},
+                                tooltip: {{
+                                    callbacks: {{
+                                        label: function(context) {{
+                                            return 'Requests: ' + context.parsed.y;
+                                        }}
+                                    }}
+                                }}
+                            }},
+                            scales: {{
+                                y: {{
+                                    beginAtZero: true,
+                                    ticks: {{
+                                        stepSize: 1
+                                    }}
+                                }},
+                                x: {{
+                                    ticks: {{
+                                        font: {{
+                                            size: 10
+                                        }},
+                                        maxRotation: 45,
+                                        minRotation: 45
+                                    }}
+                                }}
+                            }}
+                        }}
+                    }});
+                }} else {{
+                    // Show "no data" message
+                    document.getElementById('modelPieChart').parentElement.innerHTML = '<p style="text-align: center; color: #999; padding: 50px;">No usage data yet</p>';
+                    document.getElementById('modelBarChart').parentElement.innerHTML = '<p style="text-align: center; color: #999; padding: 50px;">No usage data yet</p>';
+                }}
+            </script>
         </body>
         </html>
     """
@@ -840,6 +1014,9 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
         
         model_public_name = body.get("model")
         messages = body.get("messages", [])
+        stream = body.get("stream", False)
+        
+        print(f"🌊 Stream mode: {stream}")
         
         print(f"🤖 Requested model: {model_public_name}")
         print(f"💬 Number of messages: {len(messages)}")
@@ -869,16 +1046,34 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
 
         # Log usage
         model_usage_stats[model_public_name] += 1
+        # Save stats immediately after incrementing
         config = get_config()
+        config["usage_stats"] = dict(model_usage_stats)
         save_config(config)
 
         # Use last message as prompt
         prompt = messages[-1].get("content", "")
-        print(f"📝 User prompt: {prompt[:100]}..." if len(prompt) > 100 else f"📝 User prompt: {prompt}")
+        
+        # Validate prompt is a string and not too large
+        if not isinstance(prompt, str):
+            print("❌ Prompt content must be a string")
+            raise HTTPException(status_code=400, detail="Message content must be a string.")
         
         if not prompt:
             print("❌ Last message has no content")
             raise HTTPException(status_code=400, detail="Last message must have content.")
+        
+        # Log prompt length for debugging character limit issues
+        print(f"📝 User prompt length: {len(prompt)} characters")
+        print(f"📝 User prompt preview: {prompt[:100]}..." if len(prompt) > 100 else f"📝 User prompt: {prompt}")
+        
+        # Check for reasonable character limit (LMArena appears to have limits)
+        # Typical limit seems to be around 32K-64K characters based on testing
+        MAX_PROMPT_LENGTH = 50000  # Conservative estimate
+        if len(prompt) > MAX_PROMPT_LENGTH:
+            error_msg = f"Prompt too long ({len(prompt)} characters). LMArena has a character limit of approximately {MAX_PROMPT_LENGTH} characters. Please reduce the message size."
+            print(f"❌ {error_msg}")
+            raise HTTPException(status_code=400, detail=error_msg)
         
         # Use API key + conversation tracking
         api_key_str = api_key["key"]
@@ -944,33 +1139,34 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
             print(f"📦 Payload structure: {len(payload['messages'])} messages")
         else:
             print("🔄 Using EXISTING conversation session")
-            # Follow-up message - Generate message IDs close together
+            # Follow-up message - Generate new message IDs
             user_msg_id = str(uuid7())
             print(f"👤 Generated followup user_msg_id: {user_msg_id}")
             model_msg_id = str(uuid7())
             print(f"🤖 Generated followup model_msg_id: {model_msg_id}")
             
-            # Build full conversation history from messages
+            # Build full conversation history using stored messages with their original IDs
             conversation_messages = []
-            for i, msg in enumerate(messages[:-1]):  # All but last message
-                msg_id = str(uuid7()) if i > 0 else session.get("first_user_msg_id", str(uuid7()))
+            stored_messages = session.get("messages", [])
+            
+            for stored_msg in stored_messages:
                 conversation_messages.append({
-                    "id": msg_id,
-                    "role": msg["role"],
-                    "content": msg["content"],
+                    "id": stored_msg["id"],
+                    "role": stored_msg["role"],
+                    "content": stored_msg["content"],
                     "experimental_attachments": [],
                     "parentMessageIds": [conversation_messages[-1]["id"]] if conversation_messages else [],
                     "participantPosition": "a",
-                    "modelId": model_id if msg["role"] == "assistant" else None,
+                    "modelId": model_id if stored_msg["role"] == "assistant" else None,
                     "evaluationSessionId": session["conversation_id"],
-                    "status": "success" if msg["role"] == "assistant" else "pending",
+                    "status": "success" if stored_msg["role"] == "assistant" else "pending",
                     "failureReason": None
                 })
-                if msg["role"] == "assistant":
+                if stored_msg["role"] == "assistant":
                     conversation_messages[-1]["reasoning"] = ""
             
             # Add new user message
-            last_msg_id = conversation_messages[-1]["id"] if conversation_messages else session.get("last_message_id", str(uuid7()))
+            last_msg_id = conversation_messages[-1]["id"] if conversation_messages else session.get("messages", [])[-1]["id"]
             conversation_messages.append({
                 "id": user_msg_id,
                 "role": "user",
@@ -1015,6 +1211,119 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
         print(f"\n🚀 Making API request to LMArena...")
         print(f"⏱️  Timeout set to: 120 seconds")
         
+        # Handle streaming mode
+        if stream:
+            async def generate_stream():
+                response_text = ""
+                chunk_id = f"chatcmpl-{uuid.uuid4()}"
+                
+                async with httpx.AsyncClient() as client:
+                    try:
+                        print("📡 Sending POST request for streaming...")
+                        async with client.stream('POST', url, json=payload, headers=headers, timeout=120) as response:
+                            print(f"✅ Stream opened - Status: {response.status_code}")
+                            response.raise_for_status()
+                            
+                            async for line in response.aiter_lines():
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                
+                                # Parse text chunks: a0:"Hello "
+                                if line.startswith("a0:"):
+                                    chunk_data = line[3:]
+                                    try:
+                                        text_chunk = json.loads(chunk_data)
+                                        response_text += text_chunk
+                                        
+                                        # Send SSE-formatted chunk
+                                        chunk_response = {
+                                            "id": chunk_id,
+                                            "object": "chat.completion.chunk",
+                                            "created": int(time.time()),
+                                            "model": model_public_name,
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {
+                                                    "content": text_chunk
+                                                },
+                                                "finish_reason": None
+                                            }]
+                                        }
+                                        yield f"data: {json.dumps(chunk_response)}\n\n"
+                                        
+                                    except json.JSONDecodeError:
+                                        continue
+                                
+                                # Parse error messages
+                                elif line.startswith("a3:"):
+                                    error_data = line[3:]
+                                    try:
+                                        error_message = json.loads(error_data)
+                                        print(f"  ❌ Error in stream: {error_message}")
+                                    except json.JSONDecodeError:
+                                        pass
+                                
+                                # Parse metadata for finish
+                                elif line.startswith("ad:"):
+                                    metadata_data = line[3:]
+                                    try:
+                                        metadata = json.loads(metadata_data)
+                                        finish_reason = metadata.get("finishReason", "stop")
+                                        
+                                        # Send final chunk with finish_reason
+                                        final_chunk = {
+                                            "id": chunk_id,
+                                            "object": "chat.completion.chunk",
+                                            "created": int(time.time()),
+                                            "model": model_public_name,
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {},
+                                                "finish_reason": finish_reason
+                                            }]
+                                        }
+                                        yield f"data: {json.dumps(final_chunk)}\n\n"
+                                    except json.JSONDecodeError:
+                                        continue
+                            
+                            # Update session
+                            if not session:
+                                chat_sessions[api_key_str][conversation_id] = {
+                                    "conversation_id": session_id,
+                                    "last_message_id": model_msg_id,
+                                    "model": model_public_name
+                                }
+                            else:
+                                chat_sessions[api_key_str][conversation_id]["last_message_id"] = model_msg_id
+                            
+                            yield "data: [DONE]\n\n"
+                            print(f"✅ Stream completed - {len(response_text)} chars sent")
+                            
+                    except httpx.HTTPStatusError as e:
+                        error_msg = f"LMArena API error: {e.response.status_code}"
+                        print(f"❌ {error_msg}")
+                        error_chunk = {
+                            "error": {
+                                "message": error_msg,
+                                "type": "api_error",
+                                "code": e.response.status_code
+                            }
+                        }
+                        yield f"data: {json.dumps(error_chunk)}\n\n"
+                    except Exception as e:
+                        print(f"❌ Stream error: {str(e)}")
+                        error_chunk = {
+                            "error": {
+                                "message": str(e),
+                                "type": "internal_error"
+                            }
+                        }
+                        yield f"data: {json.dumps(error_chunk)}\n\n"
+            
+            return StreamingResponse(generate_stream(), media_type="text/event-stream")
+        
+        # Handle non-streaming mode (original code)
         async with httpx.AsyncClient() as client:
             try:
                 print("📡 Sending POST request...")
@@ -1106,16 +1415,25 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
                 else:
                     print(f"✅ Response text preview: {response_text[:200]}...")
                 
-                # Update session
+                # Update session - Store message history with IDs
                 if not session:
                     chat_sessions[api_key_str][conversation_id] = {
                         "conversation_id": session_id,
-                        "last_message_id": model_msg_id,
-                        "model": model_public_name
+                        "model": model_public_name,
+                        "messages": [
+                            {"id": user_msg_id, "role": "user", "content": prompt},
+                            {"id": model_msg_id, "role": "assistant", "content": response_text.strip()}
+                        ]
                     }
                     print(f"💾 Saved new session for conversation {conversation_id}")
                 else:
-                    chat_sessions[api_key_str][conversation_id]["last_message_id"] = model_msg_id
+                    # Append new messages to history
+                    chat_sessions[api_key_str][conversation_id]["messages"].append(
+                        {"id": user_msg_id, "role": "user", "content": prompt}
+                    )
+                    chat_sessions[api_key_str][conversation_id]["messages"].append(
+                        {"id": model_msg_id, "role": "assistant", "content": response_text.strip()}
+                    )
                     print(f"💾 Updated existing session for conversation {conversation_id}")
 
                 final_response = {
@@ -1157,6 +1475,17 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
                 print(f"📤 Request payload (truncated): {json.dumps(payload, indent=2)[:500]}")
                 print(f"📥 Response text: {e.response.text[:500]}")
                 print("="*80 + "\n")
+                
+                # Handle 429 from LMArena - propagate Retry-After if available
+                if e.response.status_code == 429:
+                    retry_after = e.response.headers.get("Retry-After", "60")  # Default 60s
+                    print(f"⏱️  LMArena rate limit - Retry-After: {retry_after}s")
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"LMArena rate limit exceeded: {error_detail}",
+                        headers={"Retry-After": retry_after}
+                    )
+                
                 raise HTTPException(status_code=502, detail=error_detail)
             
             except httpx.TimeoutException as e:

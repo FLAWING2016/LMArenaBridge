@@ -193,7 +193,8 @@
     "publicName": "glm-4.6",
     "capabilities": {
       "inputCapabilities": {
-        "text": true
+        "text": true,
+        "image": false
       },
       "outputCapabilities": {
         "text": true,
@@ -295,13 +296,14 @@
     "rank": 12
   },
   {
-    "id": "84efc8b9-a441-4614-a4ff-6398f8bd34eb",
+    "id": "019a4fff-c017-726d-abb1-99b0aaf87f43",
     "organization": "deepseek",
     "provider": "deepseek",
     "publicName": "deepseek-v3.2-exp",
     "capabilities": {
       "inputCapabilities": {
-        "text": true
+        "text": true,
+        "image": false
       },
       "outputCapabilities": {
         "text": true,
@@ -1418,6 +1420,18 @@
     }
   },
   {
+    "id": "019a5028-3b35-79be-9560-3f19c3c60cdf",
+    "publicName": "newton",
+    "capabilities": {
+      "inputCapabilities": {
+        "text": true
+      },
+      "outputCapabilities": {
+        "text": true
+      }
+    }
+  },
+  {
     "id": "c15b93ed-e87b-467f-8f9f-d830fd7aa54d",
     "publicName": "lmarena-internal-test-only",
     "capabilities": {
@@ -1454,6 +1468,18 @@
     }
   },
   {
+    "id": "019a5028-3f5b-7c13-858f-206214b15022",
+    "publicName": "newton-with-reasoning",
+    "capabilities": {
+      "inputCapabilities": {
+        "text": true
+      },
+      "outputCapabilities": {
+        "text": true
+      }
+    }
+  },
+  {
     "id": "24d647d0-7945-442d-b323-08ca04e9e288",
     "publicName": "sorting-hat",
     "capabilities": {
@@ -1466,8 +1492,32 @@
     }
   },
   {
+    "id": "019a5028-42ba-750c-b6ef-65fa46d0db8f",
+    "publicName": "gauss",
+    "capabilities": {
+      "inputCapabilities": {
+        "text": true
+      },
+      "outputCapabilities": {
+        "text": true
+      }
+    }
+  },
+  {
     "id": "9af435c8-1f53-4b78-a400-c1f5e9fe09b0",
     "publicName": "leepwal",
+    "capabilities": {
+      "inputCapabilities": {
+        "text": true
+      },
+      "outputCapabilities": {
+        "text": true
+      }
+    }
+  },
+  {
+    "id": "019a5028-45c7-73db-b3b8-6dec3af9ecb4",
+    "publicName": "gauss-with-reasoning",
     "capabilities": {
       "inputCapabilities": {
         "text": true
@@ -1645,6 +1695,8 @@
   },
   {
     "id": "019a026f-30b2-7ffa-9714-7180577666e2",
+    "organization": "alibaba",
+    "provider": "alibaba",
     "publicName": "qwen3-max-2025-10-20",
     "capabilities": {
       "inputCapabilities": {
@@ -2303,6 +2355,38 @@
           "requiresUpload": true,
           "multipleImages": false
         }
+      },
+      "outputCapabilities": {
+        "image": {
+          "aspectRatios": [
+            "1:1"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "019a5050-1695-7b5d-b045-ba01ff08ec28",
+    "publicName": "wan2.5-preview",
+    "capabilities": {
+      "inputCapabilities": {
+        "text": true
+      },
+      "outputCapabilities": {
+        "image": {
+          "aspectRatios": [
+            "1:1"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "019a5050-2875-78ed-ae3a-d9a51a438685",
+    "publicName": "wan2.5-preview-prompt-extend",
+    "capabilities": {
+      "inputCapabilities": {
+        "text": true
       },
       "outputCapabilities": {
         "image": {

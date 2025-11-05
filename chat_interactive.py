@@ -40,7 +40,10 @@ def chat_session(client, model_name):
             print("\n\n👋 Goodbye!")
             break
         
-        # Handle commands
+        # Handle commands FIRST before adding to history
+        if not user_input:
+            continue
+            
         if user_input.lower() in ['exit', 'quit']:
             print("\n👋 Goodbye!")
             break
@@ -53,26 +56,30 @@ def chat_session(client, model_name):
         if user_input.lower() == 'models':
             return 'switch_model'
         
-        if not user_input:
-            continue
-        
-        # Add user message to history
+        # Add user message to history (only if not a command)
         conversation_history.append({
             "role": "user",
             "content": user_input
         })
         
-        # Get response from API
+        # Get response from API with streaming
         try:
             print("Assistant: ", end="", flush=True)
             
-            response = client.chat.completions.create(
+            stream = client.chat.completions.create(
                 model=model_name,
-                messages=conversation_history
+                messages=conversation_history,
+                stream=True  # Enable streaming
             )
             
-            assistant_message = response.choices[0].message.content
-            print(assistant_message)
+            assistant_message = ""
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    content = chunk.choices[0].delta.content
+                    print(content, end="", flush=True)
+                    assistant_message += content
+            
+            print()  # New line after streaming completes
             
             # Add assistant response to history
             conversation_history.append({
