@@ -354,29 +354,48 @@ def save_models(models):
     with open(MODELS_FILE, "w") as f:
         json.dump(models, f, indent=2)
 
+def sanitize_token(raw: str) -> str:
+    t = (raw or "").strip().strip('"').strip("'")
+    if 'arena-auth-prod-v1=' in t:
+        t = t.split('arena-auth-prod-v1=', 1)[-1]
+    if ';' in t:
+        t = t.split(';', 1)[0]
+    return t
+
 def get_env_auth_token():
-    return (os.getenv("ARENA_AUTH_TOKEN") or os.getenv("AUTH_TOKEN") or "").strip()
+    return sanitize_token(os.getenv("ARENA_AUTH_TOKEN") or os.getenv("AUTH_TOKEN") or "")
 
 def get_request_headers():
     config = get_config()
-    auth_token = (get_env_auth_token() or config.get("auth_token", "").strip())
+    auth_token = sanitize_token(get_env_auth_token() or config.get("auth_token", "").strip())
     if not auth_token:
         raise HTTPException(status_code=500, detail="Arena auth token not set in dashboard.")
     
     cf_clearance = (os.getenv("CF_CLEARANCE") or config.get("cf_clearance", "").strip())
-    return {
+    headers = {
         "Content-Type": "application/json",
+        "Accept": "*/*",
+        "Origin": "https://lmarena.ai",
+        "Referer": "https://lmarena.ai/?mode=direct",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
         "Cookie": f"cf_clearance={cf_clearance}; arena-auth-prod-v1={auth_token}",
     }
+    return headers
 
 def get_request_headers_with_token(token: str):
     """Get request headers with a specific auth token"""
     config = get_config()
-    cf_clearance = config.get("cf_clearance", "").strip()
-    return {
+    cf_clearance = (os.getenv("CF_CLEARANCE") or config.get("cf_clearance", "").strip())
+    token_s = sanitize_token(token)
+    headers = {
         "Content-Type": "application/json",
-        "Cookie": f"cf_clearance={cf_clearance}; arena-auth-prod-v1={token}",
+        "Accept": "*/*",
+        "Origin": "https://lmarena.ai",
+        "Referer": "https://lmarena.ai/?mode=direct",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+        "Cookie": f"cf_clearance={cf_clearance}; arena-auth-prod-v1={token_s}",
     }
+    return headers
 
 def get_next_auth_token():
     """Get next auth token using round-robin selection"""
