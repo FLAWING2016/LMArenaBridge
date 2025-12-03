@@ -26,7 +26,7 @@ import httpx
 DEBUG = False
 
 # Port to run the server on
-PORT = 8000
+PORT = int(os.getenv("PORT", "8000"))
 # ============================================================
 
 def debug_print(*args, **kwargs):
@@ -363,7 +363,7 @@ def get_request_headers():
     if not auth_token:
         raise HTTPException(status_code=500, detail="Arena auth token not set in dashboard.")
     
-    cf_clearance = config.get("cf_clearance", "").strip()
+    cf_clearance = (os.getenv("CF_CLEARANCE") or config.get("cf_clearance", "").strip())
     return {
         "Content-Type": "application/json",
         "Cookie": f"cf_clearance={cf_clearance}; arena-auth-prod-v1={auth_token}",
@@ -523,10 +523,9 @@ async def startup_event():
     save_models(get_models())
     # Load usage stats from config
     load_usage_stats()
-    # Start initial data fetch
-    asyncio.create_task(get_initial_data())
-    # Start periodic refresh task (every 30 minutes)
-    asyncio.create_task(periodic_refresh_task())
+    if os.getenv("DISABLE_BROWSER_INIT", "").strip().lower() not in ("1", "true"): 
+        asyncio.create_task(get_initial_data())
+        asyncio.create_task(periodic_refresh_task())
 
 # --- UI Endpoints (Login/Dashboard) ---
 
@@ -1346,6 +1345,8 @@ async def delete_auth_token(session: str = Depends(get_current_session), token_i
 async def refresh_tokens(session: str = Depends(get_current_session)):
     if not session:
         return RedirectResponse(url="/login")
+    if os.getenv("DISABLE_BROWSER_INIT", "").strip().lower() in ("1", "true"):
+        return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     await get_initial_data()
     return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
 
