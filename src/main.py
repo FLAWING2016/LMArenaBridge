@@ -6,6 +6,7 @@ import time
 import secrets
 import base64
 import mimetypes
+import os
 from collections import defaultdict
 from typing import Optional, Dict, List
 from datetime import datetime, timezone, timedelta
@@ -353,9 +354,12 @@ def save_models(models):
     with open(MODELS_FILE, "w") as f:
         json.dump(models, f, indent=2)
 
+def get_env_auth_token():
+    return (os.getenv("ARENA_AUTH_TOKEN") or os.getenv("AUTH_TOKEN") or "").strip()
+
 def get_request_headers():
     config = get_config()
-    auth_token = config.get("auth_token", "").strip()
+    auth_token = (get_env_auth_token() or config.get("auth_token", "").strip())
     if not auth_token:
         raise HTTPException(status_code=500, detail="Arena auth token not set in dashboard.")
     
@@ -382,8 +386,7 @@ def get_next_auth_token():
     # Get all available tokens
     auth_tokens = config.get("auth_tokens", [])
     if not auth_tokens:
-        # Fallback to single token
-        single_token = config.get("auth_token", "").strip()
+        single_token = (get_env_auth_token() or config.get("auth_token", "").strip())
         if single_token:
             return single_token
         raise HTTPException(status_code=500, detail="No auth tokens configured")
