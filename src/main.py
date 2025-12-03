@@ -326,6 +326,7 @@ def get_config():
     config.setdefault("auth_token", "")
     config.setdefault("auth_tokens", [])  # Multiple auth tokens
     config.setdefault("cf_clearance", "")
+    config.setdefault("arena_cookie", "")
     config.setdefault("api_keys", [])
     config.setdefault("usage_stats", {})
     
@@ -368,9 +369,9 @@ def get_env_auth_token():
 def get_request_headers():
     config = get_config()
     auth_token = sanitize_token(get_env_auth_token() or config.get("auth_token", "").strip())
-    if not auth_token:
-        raise HTTPException(status_code=500, detail="Arena auth token not set in dashboard.")
-    
+    full_cookie = (os.getenv("ARENA_COOKIE") or os.getenv("FULL_COOKIE") or config.get("arena_cookie", "").strip())
+    if not full_cookie and not auth_token:
+        raise HTTPException(status_code=500, detail="Arena auth token or full cookie not set.")
     cf_clearance = (os.getenv("CF_CLEARANCE") or config.get("cf_clearance", "").strip())
     headers = {
         "Content-Type": "application/json",
@@ -378,7 +379,7 @@ def get_request_headers():
         "Origin": "https://lmarena.ai",
         "Referer": "https://lmarena.ai/?mode=direct",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Cookie": f"cf_clearance={cf_clearance}; arena-auth-prod-v1={auth_token}",
+        "Cookie": full_cookie or f"cf_clearance={cf_clearance}; arena-auth-prod-v1={auth_token}",
     }
     return headers
 
@@ -387,13 +388,14 @@ def get_request_headers_with_token(token: str):
     config = get_config()
     cf_clearance = (os.getenv("CF_CLEARANCE") or config.get("cf_clearance", "").strip())
     token_s = sanitize_token(token)
+    full_cookie = (os.getenv("ARENA_COOKIE") or os.getenv("FULL_COOKIE") or config.get("arena_cookie", "").strip())
     headers = {
         "Content-Type": "application/json",
         "Accept": "*/*",
         "Origin": "https://lmarena.ai",
         "Referer": "https://lmarena.ai/?mode=direct",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-        "Cookie": f"cf_clearance={cf_clearance}; arena-auth-prod-v1={token_s}",
+        "Cookie": full_cookie or f"cf_clearance={cf_clearance}; arena-auth-prod-v1={token_s}",
     }
     return headers
 
@@ -681,7 +683,7 @@ async def logout(request: Request, response: Response):
     return response
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(session: str = Depends(get_current_session)):
+async def dashboard(request: Request, session: str = Depends(get_current_session)):
     if not session:
         return RedirectResponse(url="/login")
 
@@ -745,9 +747,18 @@ async def dashboard(session: str = Depends(get_current_session)):
     cf_value = (os.getenv("CF_CLEARANCE") or config.get("cf_clearance"))
     cf_status = "✅ 已配置" if cf_value else "❌ 未设置"
     cf_class = "status-good" if cf_value else "status-bad"
+    cookie_value = (os.getenv("ARENA_COOKIE") or os.getenv("FULL_COOKIE") or config.get("arena_cookie", ""))
+    masked_cookie = (cookie_value[:12] + "..." + cookie_value[-8:]) if cookie_value else ""
     
     # Get recent activity count (last 24 hours)
     recent_activity = sum(1 for timestamps in api_key_usage.values() for t in timestamps if time.time() - t < 86400)
+
+    token_check = request.query_params.get("token_check")
+    token_msg = request.query_params.get("token_msg", "")
+    banner_html = ""
+    if token_check:
+        cls = "status-good" if token_check == "ok" else "status-bad"
+        banner_html = f"<div class=\"section\"><div class=\"status-badge {cls}\">{token_msg or ('令牌有效' if token_check=='ok' else '令牌无效或已过期')}</div></div>"
 
     return f"""
         <!DOCTYPE html>
@@ -1039,6 +1050,7 @@ async def dashboard(session: str = Depends(get_current_session)):
             </div>
 
             <div class="container">
+                {banner_html}
                 <!-- Stats Overview -->
                 <div class="stats-grid">
                     <div class="stat-card">
@@ -1110,6 +1122,18 @@ async def dashboard(session: str = Depends(get_current_session)):
                     <code style="background: #f8f9fa; padding: 10px; display: block; border-radius: 6px; word-break: break-all; margin-bottom: 15px;">
                         {(os.getenv("CF_CLEARANCE") or config.get("cf_clearance", "未设置"))}
                     </code>
+                    <h3 style="margin: 15px 0; font-size: 16px;">完整 Cookie（可选）</h3>
+                    <p style="color:#666; margin-bottom:10px;">当前值：{masked_cookie if masked_cookie else '未设置'}</p>
+                    <form action="/update-arena-cookie" method="post">
+                        <div class="form-group">
+                            <label for="arena_cookie">Cookie</label>
+                            <textarea id="arena_cookie" name="arena_cookie" placeholder="粘贴完整的 Cookie（例如包含 arena-auth-prod-v1 与 cf_clearance）">{config.get("arena_cookie", "")}</textarea>
+                        </div>
+                        <button type="submit" style="background:#0066cc;">保存 Cookie</button>
+                    </form>
+                    <form action="/check-token" method="post" style="margin-top:10px;">
+                        <button type="submit" style="background:#17a2b8;">令牌自检</button>
+                    </form>
                     <form action="/refresh-tokens" method="post" style="margin-top: 15px;">
                         <button type="submit" style="background: #28a745;">🔄 Refresh Tokens &amp; Models</button>
                     </form>
@@ -1374,6 +1398,52 @@ async def refresh_tokens(session: str = Depends(get_current_session)):
         return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     await get_initial_data()
     return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/update-arena-cookie")
+async def update_arena_cookie(session: str = Depends(get_current_session), arena_cookie: str = Form("")):
+    if not session:
+        return RedirectResponse(url="/login")
+    config = get_config()
+    config["arena_cookie"] = arena_cookie.strip()
+    save_config(config)
+    return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/check-token")
+async def check_token(session: str = Depends(get_current_session)):
+    if not session:
+        return RedirectResponse(url="/login")
+    try:
+        headers = get_request_headers()
+        models = get_models()
+        model_id = None
+        for m in models:
+            if m.get("capabilities", {}).get("outputCapabilities", {}).get("text") and m.get("organization"):
+                model_id = m.get("id")
+                break
+        if not model_id:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get("https://lmarena.ai/", headers=headers, timeout=15.0)
+                ok = resp.status_code == 200
+                msg = "令牌可用" if ok else f"检查失败（HTTP {resp.status_code})"
+                status_str = "ok" if ok else "fail"
+                return RedirectResponse(url=f"/dashboard?token_check={status_str}&token_msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
+        payload = {
+            "id": str(uuid7()),
+            "mode": "direct",
+            "modelAId": model_id,
+            "userMessageId": str(uuid7()),
+            "modelAMessageId": str(uuid7()),
+            "userMessage": {"content": "ping", "experimental_attachments": []},
+            "modality": "chat"
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.post("https://lmarena.ai/nextjs-api/stream/create-evaluation", json=payload, headers=headers, timeout=20.0)
+            ok = resp.status_code == 200
+            msg = "令牌可用" if ok else (resp.json().get("message") if resp.headers.get("content-type","" ).startswith("application/json") else f"HTTP {resp.status_code}")
+            status_str = "ok" if ok else "fail"
+            return RedirectResponse(url=f"/dashboard?token_check={status_str}&token_msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
+    except Exception as e:
+        return RedirectResponse(url=f"/dashboard?token_check=fail&token_msg={str(e)}", status_code=status.HTTP_303_SEE_OTHER)
 
 # --- OpenAI Compatible API Endpoints ---
 
