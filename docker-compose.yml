@@ -1,0 +1,17 @@
+version: "3.8"
+services:
+  lmarena-bridge:
+    image: lmarena-bridge:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - PORT=8000
+      - DEBUG=${DEBUG:-0}
+      - DISABLE_BROWSER_INIT=${DISABLE_BROWSER_INIT:-1}
+      - ARENA_AUTH_TOKEN=${ARENA_AUTH_TOKEN:-}
+      - AUTH_TOKEN=${AUTH_TOKEN:-}
+      - CF_CLEARANCE=${CF_CLEARANCE:-}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
