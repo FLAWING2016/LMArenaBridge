@@ -322,7 +322,7 @@ def get_config():
         config = {}
 
     # Ensure default keys exist
-    config.setdefault("password", "admin")
+    config.setdefault("password", (os.getenv("DASHBOARD_PASSWORD") or os.getenv("ADMIN_PASSWORD") or "admin"))
     config.setdefault("auth_token", "")
     config.setdefault("auth_tokens", [])  # Multiple auth tokens
     config.setdefault("cf_clearance", "")
@@ -538,13 +538,13 @@ async def login_page(request: Request, error: Optional[str] = None):
     if await get_current_session(request):
         return RedirectResponse(url="/dashboard")
     
-    error_msg = '<div class="error-message">Invalid password. Please try again.</div>' if error else ''
+    error_msg = '<div class="error-message">密码错误，请重试。</div>' if error else ''
     
     return f"""
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Login - LMArena Bridge</title>
+            <title>登录 - LMArena Bridge</title>
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <style>
                 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -627,14 +627,14 @@ async def login_page(request: Request, error: Optional[str] = None):
         <body>
             <div class="login-container">
                 <h1>LMArena Bridge</h1>
-                <div class="subtitle">Sign in to access the dashboard</div>
+                <div class="subtitle">登录以访问控制台</div>
                 {error_msg}
                 <form action="/login" method="post">
                     <div class="form-group">
-                        <label for="password">Password</label>
-                        <input type="password" id="password" name="password" placeholder="Enter your password" required autofocus>
+                        <label for="password">密码</label>
+                        <input type="password" id="password" name="password" placeholder="请输入密码" required autofocus>
                     </div>
-                    <button type="submit">Sign In</button>
+                    <button type="submit">登录</button>
                 </form>
             </div>
         </body>
@@ -677,12 +677,12 @@ async def dashboard(session: str = Depends(get_current_session)):
             <tr>
                 <td><strong>{key['name']}</strong></td>
                 <td><code class="api-key-code">{key['key']}</code></td>
-                <td><span class="badge">{key['rpm']} RPM</span></td>
+                <td><span class="badge">{key['rpm']} 次/分钟</span></td>
                 <td><small>{created_date}</small></td>
                 <td>
-                    <form action='/delete-key' method='post' style='margin:0;' onsubmit='return confirm("Delete this API key?");'>
+                    <form action='/delete-key' method='post' style='margin:0;' onsubmit='return confirm("确认删除该 API 密钥？");'>
                         <input type='hidden' name='key_id' value='{key['key']}'>
-                        <button type='submit' class='btn-delete'>Delete</button>
+                        <button type='submit' class='btn-delete'>删除</button>
                     </form>
                 </td>
             </tr>
@@ -729,7 +729,7 @@ async def dashboard(session: str = Depends(get_current_session)):
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Dashboard - LMArena Bridge</title>
+            <title>控制台 - LMArena Bridge</title>
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
             <style>
@@ -1009,8 +1009,8 @@ async def dashboard(session: str = Depends(get_current_session)):
         <body>
             <div class="header">
                 <div class="header-content">
-                    <h1>🚀 LMArena Bridge Dashboard</h1>
-                    <a href="/logout" class="logout-btn">Logout</a>
+                    <h1>🚀 LMArena Bridge 控制台</h1>
+                    <a href="/logout" class="logout-btn">退出</a>
                 </div>
             </div>
 
@@ -1038,47 +1038,47 @@ async def dashboard(session: str = Depends(get_current_session)):
                         <span class="status-badge {token_class}">{token_status}</span>
                     </div>
                     
-                    <h3 style="margin-bottom: 15px; font-size: 16px;">Multiple Auth Tokens (Round-Robin)</h3>
-                    <p style="color: #666; margin-bottom: 15px;">Add multiple tokens for automatic cycling. Each conversation will use a consistent token.</p>
+                    <h3 style="margin-bottom: 15px; font-size: 16px;">多个授权令牌（轮询）</h3>
+                    <p style="color: #666; margin-bottom: 15px;">支持添加多个令牌自动轮询。每个会话将使用一致的令牌。</p>
                     
                     {''.join([f'''
                     <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px; background: #f8f9fa; border-radius: 6px;">
                         <code style="flex: 1; font-family: 'Courier New', monospace; font-size: 12px; word-break: break-all;">{token[:50]}...</code>
-                        <form action="/delete-auth-token" method="post" style="margin: 0;" onsubmit="return confirm('Delete this token?');">
+                        <form action="/delete-auth-token" method="post" style="margin: 0;" onsubmit="return confirm('确认删除该令牌？');">
                             <input type="hidden" name="token_index" value="{i}">
-                            <button type="submit" class="btn-delete">Delete</button>
+                            <button type="submit" class="btn-delete">删除</button>
                         </form>
                     </div>
                     ''' for i, token in enumerate(config.get("auth_tokens", []))])}
                     
-                    {('<div class="no-data">No tokens configured. Add tokens below.</div>' if not config.get("auth_tokens") else '')}
+                    {('<div class="no-data">未配置令牌。请在下方添加。</div>' if not config.get("auth_tokens") else '')}
                     
-                    <h3 style="margin-top: 25px; margin-bottom: 15px; font-size: 16px;">Add New Token</h3>
+                    <h3 style="margin-top: 25px; margin-bottom: 15px; font-size: 16px;">添加新令牌</h3>
                     <form action="/add-auth-token" method="post">
                         <div class="form-group">
-                            <label for="new_auth_token">New Arena Auth Token</label>
-                            <textarea id="new_auth_token" name="new_auth_token" placeholder="Paste a new arena-auth-prod-v1 token here" required></textarea>
+                            <label for="new_auth_token">新的 Arena 授权令牌</label>
+                            <textarea id="new_auth_token" name="new_auth_token" placeholder="在此粘贴新的 arena-auth-prod-v1 令牌" required></textarea>
                         </div>
                         <button type="submit">Add Token</button>
                     </form>
                     
                     <hr style="margin: 25px 0; border: none; border-top: 1px solid #e0e0e0;">
                     
-                    <h3 style="margin-bottom: 15px; font-size: 16px;">Legacy Single Token (Deprecated)</h3>
-                    <p style="color: #999; margin-bottom: 15px; font-size: 13px;">This single token is used as fallback if no tokens are configured above.</p>
+                    <h3 style="margin-bottom: 15px; font-size: 16px;">单令牌（已弃用）</h3>
+                    <p style="color: #999; margin-bottom: 15px; font-size: 13px;">当未配置上方多个令牌时，使用该单令牌作为回退。</p>
                     <form action="/update-auth-token" method="post">
                         <div class="form-group">
-                            <label for="auth_token">Legacy Auth Token</label>
-                            <textarea id="auth_token" name="auth_token" placeholder="Paste your arena-auth-prod-v1 token here">{config.get("auth_token", "")}</textarea>
+                            <label for="auth_token">旧版授权令牌</label>
+                            <textarea id="auth_token" name="auth_token" placeholder="在此粘贴你的 arena-auth-prod-v1 令牌">{config.get("auth_token", "")}</textarea>
                         </div>
-                        <button type="submit" style="background: #6c757d;">Update Legacy Token</button>
+                        <button type="submit" style="background: #6c757d;">更新单令牌</button>
                     </form>
                 </div>
 
                 <!-- Cloudflare Clearance -->
                 <div class="section">
                     <div class="section-header">
-                        <h2>☁️ Cloudflare Clearance</h2>
+                    <h2>☁️ Cloudflare 认证令牌</h2>
                         <span class="status-badge {cf_class}">{cf_status}</span>
                     </div>
                     <p style="color: #666; margin-bottom: 15px;">This is automatically fetched on startup. If API requests fail with 404 errors, the token may have expired.</p>
@@ -1094,14 +1094,14 @@ async def dashboard(session: str = Depends(get_current_session)):
                 <!-- API Keys -->
                 <div class="section">
                     <div class="section-header">
-                        <h2>🔑 API Keys</h2>
+                    <h2>🔑 API 密钥</h2>
                     </div>
                     <table>
                         <thead>
                             <tr>
                                 <th>Name</th>
                                 <th>Key</th>
-                                <th>Rate Limit</th>
+                                <th>速率限制</th>
                                 <th>Created</th>
                                 <th>Action</th>
                             </tr>
@@ -1111,7 +1111,7 @@ async def dashboard(session: str = Depends(get_current_session)):
                         </tbody>
                     </table>
                     
-                    <h3 style="margin-top: 30px; margin-bottom: 15px; font-size: 18px;">Create New API Key</h3>
+                    <h3 style="margin-top: 30px; margin-bottom: 15px; font-size: 18px;">创建新的 API 密钥</h3>
                     <form action="/create-key" method="post">
                         <div class="form-row">
                             <div class="form-group">
@@ -1119,7 +1119,7 @@ async def dashboard(session: str = Depends(get_current_session)):
                                 <input type="text" id="name" name="name" placeholder="e.g., Production Key" required>
                             </div>
                             <div class="form-group">
-                                <label for="rpm">Rate Limit (RPM)</label>
+                                <label for="rpm">速率限制（每分钟请求数）</label>
                                 <input type="number" id="rpm" name="rpm" value="60" min="1" max="1000" required>
                             </div>
                             <div class="form-group">
@@ -1133,7 +1133,7 @@ async def dashboard(session: str = Depends(get_current_session)):
                 <!-- Usage Statistics -->
                 <div class="section">
                     <div class="section-header">
-                        <h2>📊 Usage Statistics</h2>
+                    <h2>📊 使用统计</h2>
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px;">
                         <div>
@@ -1161,7 +1161,7 @@ async def dashboard(session: str = Depends(get_current_session)):
                 <!-- Available Models -->
                 <div class="section">
                     <div class="section-header">
-                        <h2>🤖 Available Models</h2>
+                    <h2>🤖 可用模型</h2>
                     </div>
                     <p style="color: #666; margin-bottom: 15px;">Showing top 20 text-based models (Rank 1 = Best)</p>
                     <div class="model-grid">
