@@ -715,12 +715,17 @@ async def dashboard(session: str = Depends(get_current_session)):
     else:
         stats_html = "<tr><td colspan='2' class='no-data'>No usage data yet</td></tr>"
 
-    # Check token status
-    token_status = "✅ Configured" if config.get("auth_token") else "❌ Not Set"
-    token_class = "status-good" if config.get("auth_token") else "status-bad"
-    
-    cf_status = "✅ Configured" if config.get("cf_clearance") else "❌ Not Set"
-    cf_class = "status-good" if config.get("cf_clearance") else "status-bad"
+    # Check token status (env or config)
+    env_token = get_env_auth_token()
+    token_present = bool(env_token or config.get("auth_token"))
+    token_status = "✅ 已配置" if token_present else "❌ 未设置"
+    token_class = "status-good" if token_present else "status-bad"
+    token_source = "环境变量" if env_token else "配置文件"
+    masked_token = (env_token or config.get("auth_token", ""))
+    masked_token = (masked_token[:8] + "..." + masked_token[-6:]) if masked_token else ""
+    cf_value = (os.getenv("CF_CLEARANCE") or config.get("cf_clearance"))
+    cf_status = "✅ 已配置" if cf_value else "❌ 未设置"
+    cf_class = "status-good" if cf_value else "status-bad"
     
     # Get recent activity count (last 24 hours)
     recent_activity = sum(1 for timestamps in api_key_usage.values() for t in timestamps if time.time() - t < 86400)
@@ -1081,9 +1086,10 @@ async def dashboard(session: str = Depends(get_current_session)):
                     <h2>☁️ Cloudflare 认证令牌</h2>
                         <span class="status-badge {cf_class}">{cf_status}</span>
                     </div>
-                    <p style="color: #666; margin-bottom: 15px;">This is automatically fetched on startup. If API requests fail with 404 errors, the token may have expired.</p>
+                    <p style="color:#666; margin-bottom:10px;">Arena 授权令牌来源：<strong>{token_source}</strong> {('（' + masked_token + '）' if masked_token else '')}</p>
+                    <p style="color: #666; margin-bottom: 10px;">cf_clearance（如适用）：</p>
                     <code style="background: #f8f9fa; padding: 10px; display: block; border-radius: 6px; word-break: break-all; margin-bottom: 15px;">
-                        {config.get("cf_clearance", "Not set")}
+                        {(os.getenv("CF_CLEARANCE") or config.get("cf_clearance", "未设置"))}
                     </code>
                     <form action="/refresh-tokens" method="post" style="margin-top: 15px;">
                         <button type="submit" style="background: #28a745;">🔄 Refresh Tokens &amp; Models</button>
@@ -1571,7 +1577,13 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
         debug_print(f"💭 Auto-generated Conversation ID: {conversation_id}")
         debug_print(f"🔑 Conversation key: {conversation_key[:100]}...")
         
-        headers = get_request_headers()
+        try:
+            selected_token = get_next_auth_token()
+            headers = get_request_headers_with_token(selected_token)
+            debug_print(f"📋 Using token (round-robin): {selected_token[:8]}...{selected_token[-6:]}")
+        except HTTPException:
+            headers = get_request_headers()
+            debug_print("📋 Using single token from env/config")
         debug_print(f"📋 Headers prepared (auth token length: {len(headers.get('Cookie', '').split('arena-auth-prod-v1=')[-1].split(';')[0])} chars)")
         
         # Check if conversation exists for this API key
